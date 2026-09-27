@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ client.name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-4">
+  <div>
+    <a href="{{ url_for('clients_list') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Clients</a>
+    <h1 class="page-title h3 mt-1 mb-1">{{ client.name }}</h1>
+    <p class="text-muted mb-0">
+      {{ client.email or 'No email' }}
+      {% if client.phone %} · {{ client.phone }}{% endif %}
+      {% if not client.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('client_edit', client_id=client.id) }}" class="btn btn-outline-secondary">Edit</a>
+    <form method="post" action="{{ url_for('client_delete', client_id=client.id) }}" onsubmit="return confirm('Delete this client and all related payments, charges, and invoices?');">
+      <button type="submit" class="btn btn-outline-danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card stat-card stat-clients h-100"><div class="card-body">
+      <div class="stat-label">Monthly Fee</div>
+      <p class="stat-value">{{ fmt_money(client.monthly_fee) }}</p>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card stat-card stat-budget h-100"><div class="card-body">
+      <div class="stat-label">Total Charged</div>
+      <p class="stat-value amount-budget">{{ fmt_money(client.total_charged) }}</p>
+      <div class="small text-muted">Includes opening {{ fmt_money(client.opening_balance) }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card stat-card stat-paid h-100"><div class="card-body">
+      <div class="stat-label">Amount Paid</div>
+      <p class="stat-value amount-paid">{{ fmt_money(client.total_paid) }}</p>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card stat-card stat-pending h-100"><div class="card-body">
+      <div class="stat-label">Pending</div>
+      <p class="stat-value amount-pending">{{ fmt_money(client.pending) }}</p>
+    </div></div>
+  </div>
+</div>
+
+{% if client.address or client.notes %}
+<div class="card card-soft mb-4">
+  <div class="card-body">
+    {% if client.address %}<p class="mb-1"><strong>Address:</strong> {{ client.address }}</p>{% endif %}
+    {% if client.notes %}<p class="mb-0"><strong>Notes:</strong> {{ client.notes }}</p>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card card-soft mb-4">
+      <div class="card-body">
+        <h2 class="h5">Add Charge</h2>
+        <p class="small text-muted">Use for extra work, or a one-off fee. Monthly invoices also add the monthly fee automatically.</p>
+        <form method="post" action="{{ url_for('charge_add') }}" class="row g-2">
+          <input type="hidden" name="client_id" value="{{ client.id }}">
+          <div class="col-md-6">
+            <label class="form-label">Amount</label>
+            <input type="number" step="0.01" min="0.01" name="amount" class="form-control" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Date</label>
+            <input type="date" name="charge_date" class="form-control" value="{{ today }}" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Billing month</label>
+            <input type="month" name="billing_month" class="form-control" value="{{ current_month }}" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Description</label>
+            <input type="text" name="description" class="form-control" value="Extra charge">
+          </div>
+          <div class="col-12">
+            <button type="submit" class="btn btn-brand btn-sm">Add Charge</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card card-soft">
+      <div class="card-body">
+        <h2 class="h5 mb-3">Charges</h2>
+        {% if client.charges %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Date</th><th>Month</th><th>Description</th><th class="text-end">Amount</th><th></th></tr></thead>
+            <tbody>
+              {% for ch in client.charges %}
+              <tr>
+                <td>{{ ch.charge_date.strftime('%d %b %Y') }}</td>
+                <td>{{ month_label(ch.billing_month) }}</td>
+                <td>{{ ch.description }}</td>
+                <td class="text-end amount-budget">{{ fmt_money(ch.amount) }}</td>
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('charge_delete', charge_id=ch.id) }}" onsubmit="return confirm('Remove this charge?');">
+                    <button class="btn btn-sm btn-link text-danger p-0">Remove</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state py-3">No charges yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card card-soft mb-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h2 class="h5 mb-0">Payments</h2>
+          <a href="{{ url_for('payments') }}" class="small">Record payment</a>
+        </div>
+        {% if client.payments %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Date</th><th>Method</th><th class="text-end">Amount</th><th></th></tr></thead>
+            <tbody>
+              {% for p in client.payments %}
+              <tr>
+                <td>{{ p.payment_date.strftime('%d %b %Y') }}</td>
+                <td>{{ p.method }}{% if p.notes %}<div class="small text-muted">{{ p.notes }}</div>{% endif %}</td>
+                <td class="text-end amount-paid">{{ fmt_money(p.amount) }}</td>
+                <td class="text-end">
+                  <form method="post" action="{{ url_for('payment_delete', payment_id=p.id) }}" onsubmit="return confirm('Remove this payment?');">
+                    <button class="btn btn-sm btn-link text-danger p-0">Remove</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state py-3">No payments yet.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card card-soft">
+      <div class="card-body">
+        <h2 class="h5 mb-3">Invoices</h2>
+        {% if client.invoices %}
+        <ul class="list-group list-group-flush">
+          {% for inv in client.invoices %}
+          <li class="list-group-item px-0 d-flex justify-content-between">
+            <div>
+              <a href="{{ url_for('invoice_detail', invoice_id=inv.id) }}" class="fw-semibold text-decoration-none">{{ inv.invoice_number }}</a>
+              <div class="small text-muted">{{ month_label(inv.billing_month) }}</div>
+            </div>
+            <div class="text-end">
+              <div class="{% if inv.balance_due > 0 %}amount-pending{% else %}amount-paid{% endif %}">{{ fmt_money(inv.balance_due) }}</div>
+              <a class="small" href="{{ url_for('invoice_pdf', invoice_id=inv.id) }}">Download PDF</a>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-state py-3">No invoices for this client yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,112 @@
+:root {
+  --brand: #0f766e;
+  --brand-dark: #115e59;
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --ink: #0f172a;
+  --muted: #64748b;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+.app-nav {
+  background: linear-gradient(120deg, #0f766e, #0e7490);
+  box-shadow: 0 2px 12px rgba(15, 118, 110, 0.25);
+}
+
+.stat-card {
+  border: 0;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+
+.stat-card .stat-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat-card .stat-value {
+  font-size: 1.65rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.stat-budget { border-top: 4px solid #6366f1; }
+.stat-paid { border-top: 4px solid #10b981; }
+.stat-pending { border-top: 4px solid #f59e0b; }
+.stat-clients { border-top: 4px solid #0ea5e9; }
+
+.card-soft {
+  border: 0;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.table thead th {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: #f8fafc;
+}
+
+.badge-pending {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fdba74;
+}
+
+.badge-paid {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #6ee7b7;
+}
+
+.badge-owed {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+
+.btn-brand {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.btn-brand:hover {
+  background: var(--brand-dark);
+  border-color: var(--brand-dark);
+  color: #fff;
+}
+
+.page-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.client-row:hover {
+  background: #f8fafc;
+}
+
+.empty-state {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.form-control, .form-select {
+  border-radius: 10px;
+}
+
+.amount-pending { color: #c2410c; font-weight: 700; }
+.amount-paid { color: #047857; font-weight: 700; }
+.amount-budget { color: #4338ca; font-weight: 700; }

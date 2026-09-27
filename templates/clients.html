@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <div>
+    <h1 class="page-title h3 mb-1">Clients</h1>
+    <p class="text-muted mb-0">Add, edit, or remove clients. Balances update from charges and payments.</p>
+  </div>
+  <a href="{{ url_for('client_new') }}" class="btn btn-brand"><i class="bi bi-person-plus me-1"></i>Add Client</a>
+</div>
+
+<ul class="nav nav-pills mb-3 gap-1">
+  <li class="nav-item"><a class="nav-link {% if show == 'active' %}active{% endif %}" href="{{ url_for('clients_list', show='active') }}">Active</a></li>
+  <li class="nav-item"><a class="nav-link {% if show == 'inactive' %}active{% endif %}" href="{{ url_for('clients_list', show='inactive') }}">Inactive</a></li>
+  <li class="nav-item"><a class="nav-link {% if show == 'all' %}active{% endif %}" href="{{ url_for('clients_list', show='all') }}">All</a></li>
+</ul>
+
+<div class="card card-soft">
+  <div class="card-body p-0">
+    {% if clients %}
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead>
+          <tr>
+            <th class="ps-3">Name</th>
+            <th>Contact</th>
+            <th class="text-end">Monthly Fee</th>
+            <th class="text-end">Total Charged</th>
+            <th class="text-end">Paid</th>
+            <th class="text-end">Pending</th>
+            <th class="text-end pe-3">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in clients %}
+          <tr>
+            <td class="ps-3">
+              <a href="{{ url_for('client_detail', client_id=c.id) }}" class="fw-semibold text-decoration-none">{{ c.name }}</a>
+              {% if not c.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
+            </td>
+            <td>
+              <div class="small">{{ c.email or '—' }}</div>
+              <div class="small text-muted">{{ c.phone or '' }}</div>
+            </td>
+            <td class="text-end">{{ fmt_money(c.monthly_fee) }}</td>
+            <td class="text-end amount-budget">{{ fmt_money(c.total_charged) }}</td>
+            <td class="text-end amount-paid">{{ fmt_money(c.total_paid) }}</td>
+            <td class="text-end">
+              {% if c.pending > 0 %}
+                <span class="badge badge-pending rounded-pill">{{ fmt_money(c.pending) }}</span>
+              {% else %}
+                <span class="badge badge-paid rounded-pill">{{ fmt_money(c.pending) }}</span>
+              {% endif %}
+            </td>
+            <td class="text-end pe-3">
+              <a href="{{ url_for('client_edit', client_id=c.id) }}" class="btn btn-sm btn-outline-secondary">Edit</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">No clients in this list.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

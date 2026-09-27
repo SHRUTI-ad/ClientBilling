@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice.invoice_number }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-4">
+  <div>
+    <a href="{{ url_for('invoices') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Invoices</a>
+    <h1 class="page-title h3 mt-1 mb-1">{{ invoice.invoice_number }}</h1>
+    <p class="text-muted mb-0">{{ invoice.client.name }} · {{ month_label(invoice.billing_month) }}</p>
+  </div>
+  <a href="{{ url_for('invoice_pdf', invoice_id=invoice.id) }}" class="btn btn-brand">
+    <i class="bi bi-download me-1"></i>Download PDF
+  </a>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="card card-soft">
+      <div class="card-body p-4">
+        <div class="row mb-4">
+          <div class="col-md-6">
+            <div class="text-muted small text-uppercase">Bill To</div>
+            <div class="fw-semibold">{{ invoice.client.name }}</div>
+            {% if invoice.client.address %}<div>{{ invoice.client.address }}</div>{% endif %}
+            {% if invoice.client.email %}<div>{{ invoice.client.email }}</div>{% endif %}
+            {% if invoice.client.phone %}<div>{{ invoice.client.phone }}</div>{% endif %}
+          </div>
+          <div class="col-md-6 text-md-end">
+            <div><strong>Issue date:</strong> {{ invoice.issue_date.strftime('%d %b %Y') }}</div>
+            <div><strong>Period:</strong> {{ month_label(invoice.billing_month) }}</div>
+            <div>
+              <strong>Status:</strong>
+              {% if invoice.balance_due > 0 %}
+                <span class="badge badge-pending">Balance Due</span>
+              {% else %}
+                <span class="badge badge-paid">Paid</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr><th>Description</th><th class="text-end">Amount</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Previous outstanding balance</td>
+              <td class="text-end">{{ fmt_money(invoice.previous_balance) }}</td>
+            </tr>
+            <tr>
+              <td>Monthly fee — {{ month_label(invoice.billing_month) }}</td>
+              <td class="text-end">{{ fmt_money(invoice.monthly_fee) }}</td>
+            </tr>
+            <tr>
+              <td>Total charged to date</td>
+              <td class="text-end amount-budget">{{ fmt_money(invoice.total_charged) }}</td>
+            </tr>
+            <tr>
+              <td>Total paid to date</td>
+              <td class="text-end amount-paid">{{ fmt_money(invoice.total_paid) }}</td>
+            </tr>
+            <tr class="table-success">
+              <td class="fw-bold">Balance due</td>
+              <td class="text-end fw-bold amount-pending">{{ fmt_money(invoice.balance_due) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {% if invoice.notes %}
+        <p class="mb-0"><strong>Notes:</strong> {{ invoice.notes }}</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card card-soft">
+      <div class="card-body">
+        <h2 class="h5">Quick links</h2>
+        <a class="d-block mb-2" href="{{ url_for('client_detail', client_id=invoice.client_id) }}">View client account</a>
+        <a class="d-block mb-2" href="{{ url_for('payments') }}">Record a payment</a>
+        <a class="d-block" href="{{ url_for('invoice_pdf', invoice_id=invoice.id) }}">Download PDF invoice</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

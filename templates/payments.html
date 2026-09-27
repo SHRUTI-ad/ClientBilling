@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Payments{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <div>
+    <h1 class="page-title h3 mb-1">Payments</h1>
+    <p class="text-muted mb-0">Record money received. Pending balances update automatically.</p>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="card card-soft">
+      <div class="card-body">
+        <h2 class="h5 mb-3">Record Payment</h2>
+        {% if clients %}
+        <form method="post">
+          <div class="mb-3">
+            <label class="form-label">Client</label>
+            <select name="client_id" class="form-select" required>
+              <option value="">Select client…</option>
+              {% for c in clients %}
+              <option value="{{ c.id }}">{{ c.name }} (pending {{ fmt_money(c.pending) }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Amount</label>
+            <input type="number" step="0.01" min="0.01" name="amount" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Payment date</label>
+            <input type="date" name="payment_date" class="form-control" value="{{ today }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Method</label>
+            <select name="method" class="form-select">
+              <option>Bank Transfer</option>
+              <option>UPI</option>
+              <option>Cash</option>
+              <option>Cheque</option>
+              <option>Card</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Notes</label>
+            <input type="text" name="notes" class="form-control" placeholder="Optional">
+          </div>
+          <button type="submit" class="btn btn-brand w-100">Save Payment</button>
+        </form>
+        {% else %}
+        <div class="empty-state py-3">Add an active client first.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card card-soft">
+      <div class="card-body p-0">
+        {% if payments %}
+        <div class="table-responsive">
+          <table class="table align-middle mb-0">
+            <thead>
+              <tr>
+                <th class="ps-3">Date</th>
+                <th>Client</th>
+                <th>Method</th>
+                <th class="text-end">Amount</th>
+                <th class="text-end pe-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in payments %}
+              <tr>
+                <td class="ps-3">{{ p.payment_date.strftime('%d %b %Y') }}</td>
+                <td>
+                  <a href="{{ url_for('client_detail', client_id=p.client_id) }}" class="text-decoration-none">{{ p.client.name }}</a>
+                  {% if p.notes %}<div class="small text-muted">{{ p.notes }}</div>{% endif %}
+                </td>
+                <td>{{ p.method }}</td>
+                <td class="text-end amount-paid">{{ fmt_money(p.amount) }}</td>
+                <td class="text-end pe-3">
+                  <form method="post" action="{{ url_for('payment_delete', payment_id=p.id) }}" onsubmit="return confirm('Remove this payment?');">
+                    <button class="btn btn-sm btn-outline-danger">Remove</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty-state">No payments recorded yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

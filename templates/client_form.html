@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="mb-3">
+      <a href="{{ url_for('clients_list') }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to clients</a>
+      <h1 class="page-title h3 mt-2">{{ title }}</h1>
+    </div>
+    <div class="card card-soft">
+      <div class="card-body p-4">
+        <form method="post">
+          <div class="mb-3">
+            <label class="form-label">Client name *</label>
+            <input type="text" name="name" class="form-control" required value="{{ client.name if client else '' }}">
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Email</label>
+              <input type="email" name="email" class="form-control" value="{{ client.email if client else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Phone</label>
+              <input type="text" name="phone" class="form-control" value="{{ client.phone if client else '' }}">
+            </div>
+          </div>
+          <div class="mb-3 mt-3">
+            <label class="form-label">Address</label>
+            <textarea name="address" class="form-control" rows="2">{{ client.address if client else '' }}</textarea>
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Monthly fee</label>
+              <input type="number" step="0.01" min="0" name="monthly_fee" class="form-control"
+                     value="{{ client.monthly_fee if client else '0' }}">
+              <div class="form-text">Amount billed each month when you generate invoices.</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Opening balance / past dues</label>
+              <input type="number" step="0.01" name="opening_balance" class="form-control"
+                     value="{{ client.opening_balance if client else '0' }}">
+              <div class="form-text">Any amount already pending before using this app.</div>
+            </div>
+          </div>
+          <div class="mb-3 mt-3">
+            <label class="form-label">Notes</label>
+            <textarea name="notes" class="form-control" rows="2">{{ client.notes if client else '' }}</textarea>
+          </div>
+          {% if client %}
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="is_active" id="is_active" {% if client.is_active %}checked{% endif %}>
+            <label class="form-check-label" for="is_active">Active client</label>
+          </div>
+          {% endif %}
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-brand">Save Client</button>
+            <a href="{{ url_for('clients_list') }}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
