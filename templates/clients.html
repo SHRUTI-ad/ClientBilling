@@ -4,16 +4,10 @@
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
   <div>
     <h1 class="page-title h3 mb-1">Clients</h1>
-    <p class="text-muted mb-0">Add, edit, or remove clients. Balances update from charges and payments.</p>
+    <p class="text-muted mb-0">All clients, with the current package and the amount still to receive.</p>
   </div>
   <a href="{{ url_for('client_new') }}" class="btn btn-brand"><i class="bi bi-person-plus me-1"></i>Add Client</a>
 </div>
-
-<ul class="nav nav-pills mb-3 gap-1">
-  <li class="nav-item"><a class="nav-link {% if show == 'active' %}active{% endif %}" href="{{ url_for('clients_list', show='active') }}">Active</a></li>
-  <li class="nav-item"><a class="nav-link {% if show == 'inactive' %}active{% endif %}" href="{{ url_for('clients_list', show='inactive') }}">Inactive</a></li>
-  <li class="nav-item"><a class="nav-link {% if show == 'all' %}active{% endif %}" href="{{ url_for('clients_list', show='all') }}">All</a></li>
-</ul>
 
 <div class="card card-soft">
   <div class="card-body p-0">
@@ -23,12 +17,11 @@
         <thead>
           <tr>
             <th class="ps-3">Name</th>
-            <th>Contact</th>
-            <th class="text-end">Monthly Fee</th>
-            <th class="text-end">Total Charged</th>
-            <th class="text-end">Paid</th>
+            <th>Phone</th>
+            <th class="text-end">Current Package</th>
+            <th class="text-end">Previous Balance</th>
             <th class="text-end">Pending</th>
-            <th class="text-end pe-3">Actions</th>
+            <th class="text-end pe-3"></th>
           </tr>
         </thead>
         <tbody>
@@ -36,20 +29,17 @@
           <tr>
             <td class="ps-3">
               <a href="{{ url_for('client_detail', client_id=c.id) }}" class="fw-semibold text-decoration-none">{{ c.name }}</a>
-              {% if not c.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
             </td>
-            <td>
-              <div class="small">{{ c.email or '—' }}</div>
-              <div class="small text-muted">{{ c.phone or '' }}</div>
-            </td>
-            <td class="text-end">{{ fmt_money(c.monthly_fee) }}</td>
-            <td class="text-end amount-budget">{{ fmt_money(c.total_charged) }}</td>
-            <td class="text-end amount-paid">{{ fmt_money(c.total_paid) }}</td>
+            <td>{{ c.phone or '—' }}</td>
+            <td class="text-end">{{ fmt_money(c.package_for_month(current_month)) }}</td>
+            <td class="text-end">{{ fmt_money(c.opening_balance) }}</td>
             <td class="text-end">
               {% if c.pending > 0 %}
-                <span class="badge badge-pending rounded-pill">{{ fmt_money(c.pending) }}</span>
+                <span class="amount-pending">{{ fmt_money(c.pending) }}</span>
+              {% elif c.pending < 0 %}
+                <span class="amount-paid">{{ fmt_money(c.pending) }}</span>
               {% else %}
-                <span class="badge badge-paid rounded-pill">{{ fmt_money(c.pending) }}</span>
+                {{ fmt_money(c.pending) }}
               {% endif %}
             </td>
             <td class="text-end pe-3">
@@ -61,7 +51,7 @@
       </table>
     </div>
     {% else %}
-    <div class="empty-state">No clients in this list.</div>
+    <div class="empty-state">No clients yet.</div>
     {% endif %}
   </div>
 </div>

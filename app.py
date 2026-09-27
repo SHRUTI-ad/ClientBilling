@@ -6,7 +6,7 @@ Track clients, payments, balances, and generate monthly PDF invoices.
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 
@@ -32,7 +32,9 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-from sqlalchemy import func
+from sqlalchemy import func, inspect, text
+
+START_MONTH = "2026-10"
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 PDF_DIR = os.path.join(BASE_DIR, "invoices_pdf")
@@ -63,6 +65,7 @@ class Client(db.Model):
     address = db.Column(db.Text, default="")
     monthly_fee = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     opening_balance = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    opening_date = db.Column(db.Date, nullable=True)
     notes = db.Column(db.Text, default="")
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -111,6 +114,9 @@ class Client(db.Model):
     def pending(self) -> Decimal:
         return self.total_charged - self.total_paid
 
+    def package_for_month(self, billing_month: str) -> Decimal:
+        return standard_package(billing_month)
+
 
 class Charge(db.Model):
     __tablename__ = "charges"
@@ -131,9 +137,25 @@ class Payment(db.Model):
     client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
     amount = db.Column(db.Numeric(12, 2), nullable=False)
     payment_date = db.Column(db.Date, nullable=False, default=date.today)
-    method = db.Column(db.String(50), default="Bank Transfer")
+    method = db.Column(db.String(50), default="")
+    place = db.Column(db.String(120), default="")
+    received_from = db.Column(db.String(120), default="")
     notes = db.Column(db.String(255), default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @property
+    def place_label(self) -> str:
+        return self.place or self.method or ""
+
+
+class MonthlyPackage(db.Model):
+    __tablename__ = "monthly_packages"
+    __table_args__ = (db.UniqueConstraint("client_id", "billing_month"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    billing_month = db.Column(db.String(7), nullable=False)
+    amount = db.Column(db.Numeric(12, 2), nullable=False, default=0)
 
 
 class Invoice(db.Model):
@@ -170,6 +192,12 @@ class Settings(db.Model):
 
 def money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+
+
+def parse_date(value: str | None, fallback: date | None = None) -> date:
+    if value:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    return fallback or date.today()
 
 
 def get_settings() -> Settings:
@@ -209,25 +237,150 @@ def month_label(billing_month: str) -> str:
         return billing_month
 
 
-def ensure_monthly_charge(client: Client, billing_month: str) -> Charge | None:
-    """Add monthly fee charge for the month if not already present."""
-    existing = Charge.query.filter_by(
-        client_id=client.id, billing_month=billing_month
-    ).first()
-    if existing:
-        return existing
-    if money(client.monthly_fee) <= 0:
-        return None
-    charge = Charge(
-        client_id=client.id,
-        amount=money(client.monthly_fee),
-        charge_date=date.today(),
-        billing_month=billing_month,
-        description=f"Monthly fee — {month_label(billing_month)}",
+def add_months(billing_month: str, count: int) -> str:
+    year, month = (int(part) for part in billing_month.split("-"))
+    index = (year * 12 + month - 1) + count
+    return f"{index // 12}-{index % 12 + 1:02d}"
+
+
+def current_billing_month() -> str:
+    this_month = date.today().strftime("%Y-%m")
+    return max(this_month, START_MONTH)
+
+
+def billing_months(extra_ahead: int = 2) -> list[str]:
+    last = add_months(current_billing_month(), extra_ahead)
+    months = []
+    cursor = START_MONTH
+    while cursor <= last:
+        months.append(cursor)
+        cursor = add_months(cursor, 1)
+    return months
+
+
+def months_between(start_month: str, end_month: str) -> list[str]:
+    if end_month < start_month:
+        start_month, end_month = end_month, start_month
+    start_month = max(start_month, START_MONTH)
+    months = []
+    cursor = start_month
+    while cursor <= end_month:
+        months.append(cursor)
+        cursor = add_months(cursor, 1)
+    return months
+
+
+def accounting_year_bounds(on_date: date | None = None) -> tuple[date, date]:
+    on_date = on_date or date.today()
+    first = date(2026, 10, 1)
+    if on_date < first:
+        return first, date(2027, 9, 30)
+    if on_date.month >= 10:
+        return date(on_date.year, 10, 1), date(on_date.year + 1, 9, 30)
+    return date(on_date.year - 1, 10, 1), date(on_date.year, 9, 30)
+
+
+def standard_package(billing_month: str) -> Decimal:
+    """October and the other months are 20,000. November, December, January and February are 35,000."""
+    month = int(billing_month.split("-")[1])
+    if month in (11, 12, 1, 2):
+        return money(35000)
+    return money(20000)
+
+
+def package_charge_for(client_id: int, billing_month: str) -> Charge | None:
+    return (
+        Charge.query.filter(
+            Charge.client_id == client_id,
+            Charge.billing_month == billing_month,
+            Charge.description.like("Monthly package%"),
+        )
+        .order_by(Charge.id.desc())
+        .first()
     )
-    db.session.add(charge)
+
+
+def upsert_package_charge(client: Client, billing_month: str, amount: Decimal, charge_date: date) -> Charge:
+    description = f"Monthly package — {month_label(billing_month)}"
+    charge = package_charge_for(client.id, billing_month)
+    if charge:
+        charge.amount = amount
+        charge.charge_date = charge_date
+        charge.description = description
+    else:
+        charge = Charge(
+            client_id=client.id,
+            amount=amount,
+            charge_date=charge_date,
+            billing_month=billing_month,
+            description=description,
+        )
+        db.session.add(charge)
     db.session.flush()
     return charge
+
+
+def ensure_monthly_charge(client: Client, billing_month: str) -> Charge | None:
+    """Add the saved monthly package for that month if it is not already posted."""
+    amount = client.package_for_month(billing_month)
+    if amount <= 0:
+        return package_charge_for(client.id, billing_month)
+    year, month = (int(part) for part in billing_month.split("-"))
+    return upsert_package_charge(client, billing_month, amount, date(year, month, 1))
+
+
+def build_ledger(client: Client) -> list[dict]:
+    events = []
+    opening_on = client.opening_date or (
+        client.created_at.date() if client.created_at else date.today()
+    )
+    events.append(
+        {
+            "date": opening_on,
+            "sort": 0,
+            "kind": "opening",
+            "particulars": "Previous balance already due",
+            "added": money(client.opening_balance),
+            "deducted": Decimal("0"),
+            "ref_id": None,
+        }
+    )
+    charges = Charge.query.filter_by(client_id=client.id).order_by(Charge.charge_date, Charge.id)
+    for charge in charges:
+        events.append(
+            {
+                "date": charge.charge_date,
+                "sort": 1,
+                "kind": "charge",
+                "particulars": charge.description,
+                "added": money(charge.amount),
+                "deducted": Decimal("0"),
+                "ref_id": charge.id,
+            }
+        )
+    payments = Payment.query.filter_by(client_id=client.id).order_by(Payment.payment_date, Payment.id)
+    for payment in payments:
+        who = payment.received_from or "client"
+        particulars = f"Payment received from {who}"
+        if payment.place:
+            particulars += f" · {payment.place}"
+        events.append(
+            {
+                "date": payment.payment_date,
+                "sort": 2,
+                "kind": "payment",
+                "particulars": particulars,
+                "added": Decimal("0"),
+                "deducted": money(payment.amount),
+                "ref_id": payment.id,
+            }
+        )
+    events.sort(key=lambda item: (item["date"], item["sort"], item["ref_id"] or 0))
+    balance = Decimal("0")
+    for item in events:
+        balance += item["added"] - item["deducted"]
+        item["balance"] = balance
+    return events
 
 
 def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
@@ -246,7 +399,7 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
         parent=styles["Heading1"],
         alignment=TA_CENTER,
         fontSize=20,
-        textColor=colors.HexColor("#0f766e"),
+        textColor=colors.HexColor("#E21873"),
         spaceAfter=6,
     )
     subtitle = ParagraphStyle(
@@ -291,7 +444,7 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
             Paragraph(
                 f"<b>Bill To</b><br/>{client.name}<br/>"
                 f"{(client.address or '').replace(chr(10), '<br/>')}<br/>"
-                f"{client.email}<br/>{client.phone}",
+                f"{client.phone}",
                 left,
             ),
             Paragraph(
@@ -320,25 +473,31 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
     story.append(header_table)
     story.append(Spacer(1, 18))
 
-    rows = [
-        ["Description", "Amount"],
-        ["Previous outstanding balance", fmt_money(invoice.previous_balance, symbol)],
-        [f"Monthly fee — {month_label(invoice.billing_month)}", fmt_money(invoice.monthly_fee, symbol)],
-        ["Total charged to date", fmt_money(invoice.total_charged, symbol)],
-        ["Total paid to date", fmt_money(invoice.total_paid, symbol)],
-        ["Balance due", fmt_money(invoice.balance_due, symbol)],
-    ]
-    table = Table(rows, colWidths=[4.6 * inch, 2.2 * inch])
+    ledger = [row for row in build_ledger(client) if row["date"] <= invoice.issue_date]
+    rows = [["Date", "Particulars", "Added", "Received", "Balance"]]
+    for row in ledger:
+        rows.append(
+            [
+                row["date"].strftime("%d %b %Y"),
+                Paragraph(row["particulars"], left),
+                fmt_money(row["added"], symbol) if row["added"] else "—",
+                fmt_money(row["deducted"], symbol) if row["deducted"] else "—",
+                fmt_money(row["balance"], symbol),
+            ]
+        )
+    rows.append(["", "Balance due", "", "", fmt_money(invoice.balance_due, symbol)])
+    table = Table(rows, colWidths=[0.95 * inch, 2.35 * inch, 1.05 * inch, 1.05 * inch, 1.15 * inch])
     table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f766e")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E21873")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                 ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#ecfdf5")),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#FDE7F1")),
                 ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
                 ("TOPPADDING", (0, 0), (-1, -1), 8),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
@@ -386,41 +545,207 @@ def inject_globals():
         "fmt_money": lambda v: fmt_money(v, settings.currency_symbol),
         "month_label": month_label,
         "today": date.today().isoformat(),
-        "current_month": date.today().strftime("%Y-%m"),
+        "current_month": current_billing_month(),
     }
 
 
 @app.route("/")
 def dashboard():
-    clients = Client.query.filter_by(is_active=True).order_by(Client.name).all()
-    all_clients = Client.query.order_by(Client.name).all()
-    total_budget = sum((c.total_charged for c in clients), Decimal("0"))
-    total_paid = sum((c.total_paid for c in clients), Decimal("0"))
-    total_pending = sum((c.pending for c in clients), Decimal("0"))
-    recent_payments = Payment.query.order_by(Payment.payment_date.desc(), Payment.id.desc()).limit(8).all()
-    recent_invoices = Invoice.query.order_by(Invoice.issue_date.desc(), Invoice.id.desc()).limit(8).all()
+    selected_month = request.args.get("month") or current_billing_month()
+    if selected_month < START_MONTH:
+        selected_month = START_MONTH
+    clients = Client.query.order_by(Client.name).all()
+
+    rows = []
+    for client in clients:
+        received = (
+            db.session.query(func.coalesce(func.sum(Payment.amount), 0))
+            .filter(
+                Payment.client_id == client.id,
+                func.strftime("%Y-%m", Payment.payment_date) == selected_month,
+            )
+            .scalar()
+        )
+        rows.append(
+            {
+                "client": client,
+                "package": client.package_for_month(selected_month),
+                "received": money(received),
+                "pending": client.pending,
+            }
+        )
+
     return render_template(
         "dashboard.html",
-        clients=clients,
-        all_clients=all_clients,
-        total_budget=total_budget,
-        total_paid=total_paid,
-        total_pending=total_pending,
-        recent_payments=recent_payments,
-        recent_invoices=recent_invoices,
+        rows=rows,
+        selected_month=selected_month,
+        months=billing_months(),
+        month_package=standard_package(selected_month),
+        month_received=sum((row["received"] for row in rows), Decimal("0")),
+        total_pending=sum((row["pending"] for row in rows), Decimal("0")),
+    )
+
+
+def report_data(from_date: date, to_date: date) -> dict:
+    if from_date == to_date:
+        totals = dict(
+            db.session.query(
+                func.strftime("%Y-%m-%d", Payment.payment_date),
+                func.coalesce(func.sum(Payment.amount), 0),
+            )
+            .filter(Payment.payment_date == from_date)
+            .group_by(func.strftime("%Y-%m-%d", Payment.payment_date))
+            .all()
+        )
+        chart = [{"label": from_date.strftime("%d %b %Y"), "received": float(money(totals.get(from_date.isoformat(), 0)))}]
+    else:
+        totals = dict(
+            db.session.query(
+                func.strftime("%Y-%m", Payment.payment_date),
+                func.coalesce(func.sum(Payment.amount), 0),
+            )
+            .filter(Payment.payment_date >= from_date, Payment.payment_date <= to_date)
+            .group_by(func.strftime("%Y-%m", Payment.payment_date))
+            .all()
+        )
+        chart = [
+            {"label": month_label(billing_month), "received": float(money(totals.get(billing_month, 0)))}
+            for billing_month in months_between(from_date.strftime("%Y-%m"), to_date.strftime("%Y-%m"))
+        ]
+
+    received = money(
+        db.session.query(func.coalesce(func.sum(Payment.amount), 0))
+        .filter(Payment.payment_date >= from_date, Payment.payment_date <= to_date)
+        .scalar()
+    )
+    clients = Client.query.order_by(Client.name).all()
+    months = months_between(from_date.strftime("%Y-%m"), to_date.strftime("%Y-%m"))
+    package_total = sum((standard_package(billing_month) for billing_month in months), Decimal("0")) * len(clients)
+    pending_rows = []
+    previous_rows = []
+    for client in clients:
+        if client.pending > 0:
+            pending_rows.append({"client": client, "amount": client.pending})
+        if money(client.opening_balance) > 0:
+            previous_rows.append({"client": client, "amount": money(client.opening_balance)})
+    return {
+        "chart": chart,
+        "received": received,
+        "package_total": package_total,
+        "pending_rows": pending_rows,
+        "previous_rows": previous_rows,
+        "pending_total": sum((row["amount"] for row in pending_rows), Decimal("0")),
+        "previous_total": sum((row["amount"] for row in previous_rows), Decimal("0")),
+    }
+
+
+def build_report_pdf(data: dict, settings: Settings, from_date: date, to_date: date) -> BytesIO:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm, topMargin=16 * mm, bottomMargin=16 * mm)
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("ReportTitle", parent=styles["Heading1"], alignment=TA_CENTER, textColor=colors.HexColor("#E21873"), fontSize=18)
+    normal = ParagraphStyle("ReportNormal", parent=styles["Normal"], fontSize=10, leading=14)
+    story = [
+        Paragraph(settings.business_name or "Report", title),
+        Spacer(1, 6),
+        Paragraph(f"Client balances<br/>{from_date.strftime('%d %b %Y')} to {to_date.strftime('%d %b %Y')}", ParagraphStyle("Sub", parent=normal, alignment=TA_CENTER, textColor=colors.HexColor("#8a726c"))),
+        Spacer(1, 14),
+    ]
+    symbol = settings.currency_symbol or "₹"
+    summary = [
+        ["Current package total", fmt_money(data["package_total"], symbol)],
+        ["Received", fmt_money(data["received"], symbol)],
+        ["Pending to receive", fmt_money(data["pending_total"], symbol)],
+        ["Previous balance with me", fmt_money(data["previous_total"], symbol)],
+    ]
+    summary_table = Table(summary, colWidths=[4.2 * inch, 2.2 * inch])
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#15803d")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#FDEAEA")),
+        ("BACKGROUND", (0, 3), (-1, 3), colors.HexColor("#E8F6EC")),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#f0d5e0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.extend([summary_table, Spacer(1, 16), Paragraph("Pending amount to receive", styles["Heading3"])])
+    pending = [["Client", "Phone", "Pending"]] + [
+        [row["client"].name, row["client"].phone or "", fmt_money(row["amount"], symbol)] for row in data["pending_rows"]
+    ]
+    if len(pending) == 1:
+        pending.append(["No client has a pending amount", "", ""])
+    story.append(_report_client_table(pending))
+    story.extend([Spacer(1, 14), Paragraph("Previous balance with me", styles["Heading3"])])
+    previous = [["Client", "Phone", "Previous balance"]] + [
+        [row["client"].name, row["client"].phone or "", fmt_money(row["amount"], symbol)] for row in data["previous_rows"]
+    ]
+    if len(previous) == 1:
+        previous.append(["No client has a previous balance", "", ""])
+    story.append(_report_client_table(previous))
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def _report_client_table(rows: list) -> Table:
+    table = Table(rows, colWidths=[3.1 * inch, 1.6 * inch, 1.7 * inch])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E21873")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (2, 1), (2, -1), "RIGHT"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#f0d5e0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    return table
+
+
+@app.route("/reports")
+def reports():
+    year_start, year_end = accounting_year_bounds()
+    from_date = parse_date(request.args.get("from"), year_start)
+    to_date = parse_date(request.args.get("to"), year_end)
+    if from_date > to_date:
+        from_date, to_date = to_date, from_date
+    today = date.today()
+    data = report_data(from_date, to_date)
+    return render_template(
+        "reports.html",
+        from_date=from_date.isoformat(),
+        to_date=to_date.isoformat(),
+        today=today.isoformat(),
+        month_start=today.replace(day=1).isoformat(),
+        year_start=year_start.isoformat(),
+        year_end=year_end.isoformat(),
+        **data,
+    )
+
+
+@app.route("/reports/pdf")
+def reports_pdf():
+    year_start, year_end = accounting_year_bounds()
+    from_date = parse_date(request.args.get("from"), year_start)
+    to_date = parse_date(request.args.get("to"), year_end)
+    if from_date > to_date:
+        from_date, to_date = to_date, from_date
+    pdf = build_report_pdf(report_data(from_date, to_date), get_settings(), from_date, to_date)
+    return send_file(
+        pdf,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"report-{from_date.isoformat()}-to-{to_date.isoformat()}.pdf",
     )
 
 
 @app.route("/clients")
 def clients_list():
-    show = request.args.get("show", "active")
-    q = Client.query.order_by(Client.name)
-    if show == "active":
-        q = q.filter_by(is_active=True)
-    elif show == "inactive":
-        q = q.filter_by(is_active=False)
-    clients = q.all()
-    return render_template("clients.html", clients=clients, show=show)
+    clients = Client.query.order_by(Client.name).all()
+    return render_template("clients.html", clients=clients)
 
 
 @app.route("/clients/new", methods=["GET", "POST"])
@@ -433,6 +758,7 @@ def client_new():
             address=request.form.get("address", "").strip(),
             monthly_fee=money(request.form.get("monthly_fee") or 0),
             opening_balance=money(request.form.get("opening_balance") or 0),
+            opening_date=parse_date(request.form.get("opening_date")),
             notes=request.form.get("notes", "").strip(),
             is_active=True,
         )
@@ -449,7 +775,11 @@ def client_new():
 @app.route("/clients/<int:client_id>")
 def client_detail(client_id):
     client = Client.query.get_or_404(client_id)
-    return render_template("client_detail.html", client=client)
+    return render_template(
+        "client_detail.html",
+        client=client,
+        ledger=build_ledger(client),
+    )
 
 
 @app.route("/clients/<int:client_id>/edit", methods=["GET", "POST"])
@@ -462,6 +792,7 @@ def client_edit(client_id):
         client.address = request.form.get("address", "").strip()
         client.monthly_fee = money(request.form.get("monthly_fee") or 0)
         client.opening_balance = money(request.form.get("opening_balance") or 0)
+        client.opening_date = parse_date(request.form.get("opening_date"), client.opening_date)
         client.notes = request.form.get("notes", "").strip()
         client.is_active = request.form.get("is_active") == "on"
         if not client.name:
@@ -494,18 +825,40 @@ def payments():
         payment = Payment(
             client_id=client_id,
             amount=amount,
-            payment_date=datetime.strptime(request.form["payment_date"], "%Y-%m-%d").date(),
-            method=request.form.get("method", "Bank Transfer").strip(),
+            payment_date=parse_date(request.form.get("payment_date")),
+            method="",
+            place=request.form.get("place", "").strip(),
+            received_from=request.form.get("received_from", "").strip(),
             notes=request.form.get("notes", "").strip(),
         )
         db.session.add(payment)
         db.session.commit()
         flash("Payment recorded. Balance updated.", "success")
-        return redirect(url_for("payments"))
+        return redirect(request.referrer or url_for("payments"))
 
     payments_list = Payment.query.order_by(Payment.payment_date.desc(), Payment.id.desc()).all()
     clients = Client.query.filter_by(is_active=True).order_by(Client.name).all()
     return render_template("payments.html", payments=payments_list, clients=clients)
+
+
+@app.route("/payments/<int:payment_id>/edit", methods=["GET", "POST"])
+def payment_edit(payment_id):
+    payment = Payment.query.get_or_404(payment_id)
+    if request.method == "POST":
+        amount = money(request.form.get("amount") or 0)
+        if amount <= 0:
+            flash("Payment amount must be greater than zero.", "danger")
+            return redirect(url_for("payment_edit", payment_id=payment.id))
+        payment.amount = amount
+        payment.payment_date = parse_date(request.form.get("payment_date"), payment.payment_date)
+        payment.place = request.form.get("place", "").strip()
+        payment.received_from = request.form.get("received_from", "").strip()
+        payment.notes = request.form.get("notes", "").strip()
+        db.session.commit()
+        flash("Payment updated. Balance recalculated.", "success")
+        return redirect(url_for("client_detail", client_id=payment.client_id))
+    clients = Client.query.filter_by(is_active=True).order_by(Client.name).all()
+    return render_template("payment_form.html", payment=payment, clients=clients)
 
 
 @app.route("/payments/<int:payment_id>/delete", methods=["POST"])
@@ -517,25 +870,55 @@ def payment_delete(payment_id):
     return redirect(request.referrer or url_for("payments"))
 
 
-@app.route("/charges", methods=["POST"])
-def charge_add():
-    client_id = int(request.form["client_id"])
+@app.route("/clients/<int:client_id>/months", methods=["POST"])
+def save_month(client_id):
+    client = Client.query.get_or_404(client_id)
+    billing_month = request.form.get("billing_month")
+    if not billing_month:
+        flash("Choose a month first.", "danger")
+        return redirect(url_for("client_detail", client_id=client.id))
     amount = money(request.form.get("amount") or 0)
-    billing_month = request.form.get("billing_month") or date.today().strftime("%Y-%m")
     if amount <= 0:
-        flash("Charge amount must be greater than zero.", "danger")
-        return redirect(url_for("client_detail", client_id=client_id))
-    charge = Charge(
-        client_id=client_id,
-        amount=amount,
-        charge_date=datetime.strptime(request.form.get("charge_date") or date.today().isoformat(), "%Y-%m-%d").date(),
-        billing_month=billing_month,
-        description=request.form.get("description", "Extra charge").strip() or "Extra charge",
-    )
-    db.session.add(charge)
+        flash("Enter a package amount greater than zero.", "danger")
+        return redirect(url_for("client_detail", client_id=client.id))
+    package = MonthlyPackage.query.filter_by(
+        client_id=client.id, billing_month=billing_month
+    ).first()
+    if not package:
+        package = MonthlyPackage(client_id=client.id, billing_month=billing_month)
+        db.session.add(package)
+    package.amount = amount
+    year, month = (int(part) for part in billing_month.split("-"))
+    upsert_package_charge(client, billing_month, amount, date(year, month, 1))
     db.session.commit()
-    flash("Charge added. Balance updated.", "success")
-    return redirect(url_for("client_detail", client_id=client_id))
+    flash(f"{month_label(billing_month)} saved. Balance updated.", "success")
+    return redirect(url_for("client_detail", client_id=client.id))
+
+
+@app.route("/charges/<int:charge_id>/edit", methods=["GET", "POST"])
+def charge_edit(charge_id):
+    charge = Charge.query.get_or_404(charge_id)
+    if request.method == "POST":
+        amount = money(request.form.get("amount") or 0)
+        if amount <= 0:
+            flash("Amount must be greater than zero.", "danger")
+            return redirect(url_for("charge_edit", charge_id=charge.id))
+        charge.amount = amount
+        charge.charge_date = parse_date(request.form.get("charge_date"), charge.charge_date)
+        charge.billing_month = request.form.get("billing_month") or charge.billing_month
+        charge.description = request.form.get("description", "").strip() or charge.description
+        if charge.description.startswith("Monthly package"):
+            package = MonthlyPackage.query.filter_by(
+                client_id=charge.client_id, billing_month=charge.billing_month
+            ).first()
+            if not package:
+                package = MonthlyPackage(client_id=charge.client_id, billing_month=charge.billing_month)
+                db.session.add(package)
+            package.amount = amount
+        db.session.commit()
+        flash("Entry updated. Balance recalculated.", "success")
+        return redirect(url_for("client_detail", client_id=charge.client_id))
+    return render_template("charge_form.html", charge=charge)
 
 
 @app.route("/charges/<int:charge_id>/delete", methods=["POST"])
@@ -580,7 +963,7 @@ def invoices():
                 invoice_number=next_invoice_number(billing_month),
                 billing_month=billing_month,
                 issue_date=date.today(),
-                monthly_fee=money(client.monthly_fee),
+                monthly_fee=client.package_for_month(billing_month),
                 previous_balance=previous_balance,
                 total_charged=client.total_charged,
                 total_paid=client.total_paid,
@@ -605,7 +988,8 @@ def invoices():
 @app.route("/invoices/<int:invoice_id>")
 def invoice_detail(invoice_id):
     invoice = Invoice.query.get_or_404(invoice_id)
-    return render_template("invoice_detail.html", invoice=invoice)
+    ledger = [row for row in build_ledger(invoice.client) if row["date"] <= invoice.issue_date]
+    return render_template("invoice_detail.html", invoice=invoice, ledger=ledger)
 
 
 @app.route("/invoices/<int:invoice_id>/pdf")
@@ -650,8 +1034,25 @@ def settings_page():
 # Boot
 # ---------------------------------------------------------------------------
 
+def upgrade_schema():
+    inspector = inspect(db.engine)
+    tables = set(inspector.get_table_names())
+    if "payments" in tables:
+        columns = {column["name"] for column in inspector.get_columns("payments")}
+        if "place" not in columns:
+            db.session.execute(text("ALTER TABLE payments ADD COLUMN place VARCHAR(120) DEFAULT ''"))
+        if "received_from" not in columns:
+            db.session.execute(text("ALTER TABLE payments ADD COLUMN received_from VARCHAR(120) DEFAULT ''"))
+    if "clients" in tables:
+        columns = {column["name"] for column in inspector.get_columns("clients")}
+        if "opening_date" not in columns:
+            db.session.execute(text("ALTER TABLE clients ADD COLUMN opening_date DATE"))
+    db.session.commit()
+
+
 with app.app_context():
     db.create_all()
+    upgrade_schema()
     get_settings()
 
 

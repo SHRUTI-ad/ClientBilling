@@ -23,6 +23,7 @@
           <li class="nav-item"><a class="nav-link {% if request.endpoint and 'client' in request.endpoint %}active{% endif %}" href="{{ url_for('clients_list') }}">Clients</a></li>
           <li class="nav-item"><a class="nav-link {% if request.endpoint and 'payment' in request.endpoint %}active{% endif %}" href="{{ url_for('payments') }}">Payments</a></li>
           <li class="nav-item"><a class="nav-link {% if request.endpoint and 'invoice' in request.endpoint %}active{% endif %}" href="{{ url_for('invoices') }}">Invoices</a></li>
+          <li class="nav-item"><a class="nav-link {% if request.endpoint == 'reports' %}active{% endif %}" href="{{ url_for('reports') }}">Reports</a></li>
           <li class="nav-item"><a class="nav-link {% if request.endpoint == 'settings_page' %}active{% endif %}" href="{{ url_for('settings_page') }}">Settings</a></li>
         </ul>
       </div>

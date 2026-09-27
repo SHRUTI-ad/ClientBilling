@@ -14,32 +14,32 @@
             <label class="form-label">Client name *</label>
             <input type="text" name="name" class="form-control" required value="{{ client.name if client else '' }}">
           </div>
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Email</label>
-              <input type="email" name="email" class="form-control" value="{{ client.email if client else '' }}">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Phone</label>
-              <input type="text" name="phone" class="form-control" value="{{ client.phone if client else '' }}">
-            </div>
+          <input type="hidden" name="email" value="{{ client.email if client else '' }}">
+          <div class="mb-3">
+            <label class="form-label">Phone number</label>
+            <input type="text" name="phone" class="form-control" value="{{ client.phone if client else '' }}">
           </div>
           <div class="mb-3 mt-3">
             <label class="form-label">Address</label>
             <textarea name="address" class="form-control" rows="2">{{ client.address if client else '' }}</textarea>
           </div>
           <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Monthly fee</label>
+            <div class="col-md-4">
+              <label class="form-label">Usual monthly package</label>
               <input type="number" step="0.01" min="0" name="monthly_fee" class="form-control"
                      value="{{ client.monthly_fee if client else '0' }}">
-              <div class="form-text">Amount billed each month when you generate invoices.</div>
+              <div class="form-text">Used only when a month has no specific package.</div>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Opening balance / past dues</label>
+            <div class="col-md-4">
+              <label class="form-label">Previous balance already due</label>
               <input type="number" step="0.01" name="opening_balance" class="form-control"
                      value="{{ client.opening_balance if client else '0' }}">
-              <div class="form-text">Any amount already pending before using this app.</div>
+              <div class="form-text">Amount already pending from earlier months or last year.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Previous balance as on</label>
+              <input type="date" name="opening_date" class="form-control"
+                     value="{{ client.opening_date.isoformat() if client and client.opening_date else today }}">
             </div>
           </div>
           <div class="mb-3 mt-3">

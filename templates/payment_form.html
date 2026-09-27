@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Edit Payment{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <a href="{{ url_for('client_detail', client_id=payment.client_id) }}" class="text-decoration-none small"><i class="bi bi-arrow-left"></i> Back to client</a>
+    <h1 class="page-title h3 mt-2 mb-3">Edit Payment</h1>
+    <div class="card card-soft">
+      <div class="card-body p-4">
+        <form method="post">
+          <div class="mb-3">
+            <label class="form-label">Client</label>
+            <input class="form-control" value="{{ payment.client.name }}" disabled>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Amount received</label>
+            <input type="number" step="0.01" min="0.01" name="amount" class="form-control" value="{{ payment.amount }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Payment date</label>
+            <input type="date" name="payment_date" class="form-control" value="{{ payment.payment_date.isoformat() }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Payment received from</label>
+            <input type="text" name="received_from" class="form-control" value="{{ payment.received_from }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Place</label>
+            <input type="text" name="place" class="form-control" value="{{ payment.place }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Notes</label>
+            <input type="text" name="notes" class="form-control" value="{{ payment.notes }}">
+          </div>
+          <button type="submit" class="btn btn-brand">Save Changes</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
