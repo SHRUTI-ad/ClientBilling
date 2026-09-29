@@ -26,6 +26,9 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch, mm
 from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    PageTemplate,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -99,7 +102,7 @@ class Client(db.Model):
             .filter(Charge.client_id == self.id)
             .scalar()
         )
-        return Decimal(str(self.opening_balance or 0)) + Decimal(str(total))
+        return Decimal(str(total))
 
     @property
     def total_paid(self) -> Decimal:
@@ -112,7 +115,7 @@ class Client(db.Model):
 
     @property
     def pending(self) -> Decimal:
-        return self.total_charged - self.total_paid
+        return self.total_charged - self.total_paid - money(self.opening_balance)
 
     def package_for_month(self, billing_month: str) -> Decimal:
         return standard_package(billing_month)
@@ -339,9 +342,9 @@ def build_ledger(client: Client) -> list[dict]:
             "date": opening_on,
             "sort": 0,
             "kind": "opening",
-            "particulars": "Previous balance already due",
-            "added": money(client.opening_balance),
-            "deducted": Decimal("0"),
+            "particulars": "Advance balance",
+            "added": Decimal("0"),
+            "deducted": money(client.opening_balance),
             "ref_id": None,
         }
     )
@@ -383,35 +386,64 @@ def build_ledger(client: Client) -> list[dict]:
     return events
 
 
+_letterhead_reader = None
+
+
+def letterhead_reader():
+    """A smaller copy of the letterhead, so each invoice PDF stays light."""
+    global _letterhead_reader
+    if _letterhead_reader is not None:
+        return _letterhead_reader
+    background = os.path.join(BASE_DIR, "BILL_GROWW.png")
+    if not os.path.exists(background):
+        return None
+    from PIL import Image as PILImage
+    from reportlab.lib.utils import ImageReader
+
+    image = PILImage.open(background).convert("RGB")
+    image.thumbnail((1240, 1754), PILImage.Resampling.LANCZOS)
+    encoded = BytesIO()
+    image.save(encoded, format="JPEG", quality=85)
+    encoded.seek(0)
+    _letterhead_reader = ImageReader(encoded)
+    return _letterhead_reader
+
+
+def draw_invoice_background(canvas, doc) -> None:
+    reader = letterhead_reader()
+    if reader is None:
+        return
+    canvas.saveState()
+    canvas.drawImage(reader, 0, 0, width=A4[0], height=A4[1], preserveAspectRatio=False)
+    canvas.restoreState()
+
+
 def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
     buffer = BytesIO()
-    doc = SimpleDocTemplate(
+    page_width, page_height = A4
+    content_width = page_width - 32 * mm
+    # Keep text in the empty cream area: below the logo and above the bank details.
+    frame = Frame(
+        16 * mm,
+        page_height * 0.45,
+        content_width,
+        page_height * 0.39,
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+        id="invoice-body",
+        showBoundary=0,
+    )
+    doc = BaseDocTemplate(
         buffer,
         pagesize=A4,
-        rightMargin=20 * mm,
-        leftMargin=20 * mm,
-        topMargin=18 * mm,
-        bottomMargin=18 * mm,
+        title=invoice.invoice_number,
     )
+    doc.addPageTemplates([PageTemplate(id="letterhead", frames=[frame], onPage=draw_invoice_background)])
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "TitleCenter",
-        parent=styles["Heading1"],
-        alignment=TA_CENTER,
-        fontSize=20,
-        textColor=colors.HexColor("#E21873"),
-        spaceAfter=6,
-    )
-    subtitle = ParagraphStyle(
-        "Sub",
-        parent=styles["Normal"],
-        alignment=TA_CENTER,
-        fontSize=11,
-        textColor=colors.HexColor("#475569"),
-        spaceAfter=16,
-    )
-    left = ParagraphStyle("Left", parent=styles["Normal"], alignment=TA_LEFT, fontSize=10, leading=14)
-    right = ParagraphStyle("Right", parent=styles["Normal"], alignment=TA_RIGHT, fontSize=10, leading=14)
+    left = ParagraphStyle("Left", parent=styles["Normal"], alignment=TA_LEFT, fontSize=9, leading=12, textColor=colors.HexColor("#1a1a1a"))
+    right = ParagraphStyle("Right", parent=styles["Normal"], alignment=TA_RIGHT, fontSize=9, leading=12, textColor=colors.HexColor("#1a1a1a"))
     bold = ParagraphStyle(
         "Bold",
         parent=styles["Normal"],
@@ -421,23 +453,12 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
     )
 
     client = invoice.client
-    symbol = settings.currency_symbol or "₹"
+    # Helvetica does not contain the ₹ glyph and renders it as a black box.
+    symbol = "Rs. "
     story = []
 
-    story.append(Paragraph(settings.business_name or "Invoice", title_style))
-    biz_lines = []
-    if settings.business_address:
-        biz_lines.append(settings.business_address.replace("\n", "<br/>"))
-    contact_bits = [x for x in [settings.business_email, settings.business_phone] if x]
-    if contact_bits:
-        biz_lines.append(" | ".join(contact_bits))
-    if biz_lines:
-        story.append(Paragraph("<br/>".join(biz_lines), subtitle))
-    else:
-        story.append(Spacer(1, 8))
-
     story.append(Paragraph("MONTHLY INVOICE", bold))
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 6))
 
     header_data = [
         [
@@ -456,12 +477,13 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
             ),
         ]
     ]
-    header_table = Table(header_data, colWidths=[3.4 * inch, 3.4 * inch])
+    header_table = Table(header_data, colWidths=[content_width * 0.5, content_width * 0.5])
     header_table.setStyle(
         TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+                ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1a1a1a")),
                 ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
                 ("LEFTPADDING", (0, 0), (-1, -1), 10),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 10),
@@ -471,7 +493,7 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
         )
     )
     story.append(header_table)
-    story.append(Spacer(1, 18))
+    story.append(Spacer(1, 10))
 
     ledger = [row for row in build_ledger(client) if row["date"] <= invoice.issue_date]
     rows = [["Date", "Particulars", "Added", "Received", "Balance"]]
@@ -486,17 +508,28 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
             ]
         )
     rows.append(["", "Balance due", "", "", fmt_money(invoice.balance_due, symbol)])
-    table = Table(rows, colWidths=[0.95 * inch, 2.35 * inch, 1.05 * inch, 1.05 * inch, 1.15 * inch])
+    table = Table(
+        rows,
+        colWidths=[
+            content_width * 0.14,
+            content_width * 0.36,
+            content_width * 0.16,
+            content_width * 0.16,
+            content_width * 0.18,
+        ],
+    )
     table.setStyle(
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E21873")),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                 ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TEXTCOLOR", (0, 1), (-1, -1), colors.HexColor("#1a1a1a")),
+                ("BACKGROUND", (0, 1), (-1, -2), colors.white),
                 ("ALIGN", (2, 1), (-1, -1), "RIGHT"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e7c3d2")),
                 ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#FDE7F1")),
                 ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
                 ("TOPPADDING", (0, 0), (-1, -1), 8),
@@ -507,24 +540,16 @@ def build_invoice_pdf(invoice: Invoice, settings: Settings) -> BytesIO:
         )
     )
     story.append(table)
-    story.append(Spacer(1, 20))
+    story.append(Spacer(1, 8))
 
     if invoice.notes:
         story.append(Paragraph(f"<b>Notes:</b> {invoice.notes}", left))
-        story.append(Spacer(1, 10))
+        story.append(Spacer(1, 6))
 
     story.append(
         Paragraph(
-            "Please settle the pending balance at your earliest convenience. "
-            "Thank you for your business.",
-            left,
-        )
-    )
-    story.append(Spacer(1, 24))
-    story.append(
-        Paragraph(
             f"Generated on {datetime.now().strftime('%d %b %Y %H:%M')}",
-            ParagraphStyle("Foot", parent=styles["Normal"], fontSize=8, textColor=colors.grey, alignment=TA_CENTER),
+            ParagraphStyle("Foot", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#334155"), alignment=TA_CENTER),
         )
     )
 
