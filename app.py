@@ -386,35 +386,12 @@ def build_ledger(client: Client) -> list[dict]:
     return events
 
 
-_letterhead_reader = None
-
-
-def letterhead_reader():
-    """A smaller copy of the letterhead, so each invoice PDF stays light."""
-    global _letterhead_reader
-    if _letterhead_reader is not None:
-        return _letterhead_reader
+def draw_invoice_background(canvas, doc) -> None:
     background = os.path.join(BASE_DIR, "BILL_GROWW.png")
     if not os.path.exists(background):
-        return None
-    from PIL import Image as PILImage
-    from reportlab.lib.utils import ImageReader
-
-    image = PILImage.open(background).convert("RGB")
-    image.thumbnail((1240, 1754), PILImage.Resampling.LANCZOS)
-    encoded = BytesIO()
-    image.save(encoded, format="JPEG", quality=85)
-    encoded.seek(0)
-    _letterhead_reader = ImageReader(encoded)
-    return _letterhead_reader
-
-
-def draw_invoice_background(canvas, doc) -> None:
-    reader = letterhead_reader()
-    if reader is None:
         return
     canvas.saveState()
-    canvas.drawImage(reader, 0, 0, width=A4[0], height=A4[1], preserveAspectRatio=False)
+    canvas.drawImage(background, 0, 0, width=A4[0], height=A4[1], preserveAspectRatio=False, mask="auto")
     canvas.restoreState()
 
 
